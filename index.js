@@ -365,7 +365,7 @@ async function run() {
         console.log("Updating user:", email);
         console.log("Update data:", updateData);
 
-        // Prevent changing immutable fields
+        // Prevent changing email fields
         delete updateData._id;
         delete updateData.email;
 
