@@ -1,2 +1,4 @@
 node_modules
 .env
+firebaseServiceKey.json
+firebaseServiceKeyConverter.js
