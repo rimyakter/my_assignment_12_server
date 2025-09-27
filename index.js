@@ -257,7 +257,7 @@ async function run() {
       }
     );
 
-    // ✅ Update donation request (admin OR requester can update details)
+    //-------Update donation request (admin OR requester can update details)---------
     app.put(
       "/donationRequests/:id",
       verifyJWT,
@@ -277,10 +277,15 @@ async function run() {
           if (!request) {
             return res.status(404).json({ error: "Request not found" });
           }
+          // Fetch the user
+          const user = await usersCollection.findOne({
+            email: req.tokenEmail.toLowerCase(),
+          });
+          if (!user) return res.status(404).json({ error: "User not found" });
 
           // Only admin OR original requester can update
           if (
-            req.tokenRole !== "admin" &&
+            user.role !== "admin" &&
             request.requesterEmail !== req.tokenEmail
           ) {
             return res
@@ -302,37 +307,50 @@ async function run() {
 
     // ------------✅ Delete donation request (admin OR requester only)-----------------
 
-    app.delete("/donationRequests/:id", verifyJWT, async (req, res) => {
-      try {
-        const { id } = req.params;
+    app.delete(
+      "/donationRequests/:id",
+      verifyJWT,
+      roleBaseAccess("admin", "donor"),
+      async (req, res) => {
+        try {
+          const { id } = req.params;
 
-        if (!ObjectId.isValid(id)) {
-          return res.status(400).json({ error: "Invalid request ID" });
+          if (!ObjectId.isValid(id)) {
+            return res.status(400).json({ error: "Invalid request ID" });
+          }
+
+          const objectId = new ObjectId(id);
+          const request = await donationRequestsCollection.findOne({
+            _id: objectId,
+          });
+
+          if (!request) {
+            return res.status(404).json({ error: "Request not found" });
+          }
+          // Fetch the user
+          const user = await usersCollection.findOne({
+            email: req.tokenEmail.toLowerCase(),
+          });
+          if (!user) return res.status(404).json({ error: "User not found" });
+
+          // ✅ Only allow deletion if requester email matches token
+          if (
+            request.requesterEmail !== req.tokenEmail &&
+            user.role !== "admin"
+          ) {
+            return res
+              .status(403)
+              .json({ error: "Not authorized to delete this request" });
+          }
+
+          await donationRequestsCollection.deleteOne({ _id: objectId });
+          res.json({ message: "Request deleted" });
+        } catch (err) {
+          console.error("Delete route error:", err);
+          res.status(500).json({ error: "Internal server error" });
         }
-
-        const objectId = new ObjectId(id);
-        const request = await donationRequestsCollection.findOne({
-          _id: objectId,
-        });
-
-        if (!request) {
-          return res.status(404).json({ error: "Request not found" });
-        }
-
-        // ✅ Only allow deletion if requester email matches token
-        if (request.requesterEmail !== req.tokenEmail) {
-          return res
-            .status(403)
-            .json({ error: "Not authorized to delete this request" });
-        }
-
-        await donationRequestsCollection.deleteOne({ _id: objectId });
-        res.json({ message: "Request deleted" });
-      } catch (err) {
-        console.error("Delete route error:", err);
-        res.status(500).json({ error: "Internal server error" });
       }
-    });
+    );
 
     //---------- allBloodDonation for admin and volunteer only-------------------
 
