@@ -70,6 +70,7 @@ async function run() {
     const donationRequestsCollection = db.collection("donationRequests");
     const usersCollection = db.collection("users");
     const blogsCollection = db.collection("blogs");
+    const contactFormCollection = db.collection("contactFormData");
 
     //jwt generate
     app.post("/jwt", (req, res) => {
@@ -775,6 +776,44 @@ async function run() {
       }
     );
 
+    //----Contact Us----------
+
+    // POST API to save contact form
+    app.post("/api/contact", async (req, res) => {
+      try {
+        const { name, email, subject, message } = req.body;
+
+        // Basic validation
+        if (!name || !email || !subject || !message) {
+          return res.status(400).json({ error: "All fields are required" });
+        }
+
+        const newContact = {
+          name,
+          email,
+          subject,
+          message,
+          createdAt: new Date(), // store as Date object
+        };
+
+        // Save to MongoDB
+        const result = await contactFormCollection.insertOne(newContact);
+
+        // Optionally return the inserted document
+        const insertedContact = await contactFormCollection.findOne({
+          _id: result.insertedId,
+        });
+
+        return res.status(201).json({
+          message: "Contact form submitted successfully",
+          data: insertedContact,
+        });
+      } catch (error) {
+        console.error("Error saving contact form:", error);
+        return res.status(500).json({ error: "Failed to submit contact form" });
+      }
+    });
+
     //---------Blogs API(Admin)-------------------------
 
     // ===================== BLOG ROUTES ===================== //
@@ -827,6 +866,25 @@ async function run() {
         }
       }
     );
+
+    //Blogs Details page api
+
+    app.get("/api/blogs/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).json({ error: "Invalid blog ID" });
+        }
+
+        const blog = await blogsCollection.findOne({ _id: new ObjectId(id) });
+        if (!blog) return res.status(404).json({ error: "Blog not found" });
+
+        res.json(blog);
+      } catch (error) {
+        console.error("Error fetching blog:", error);
+        res.status(500).json({ error: "Failed to fetch blog" });
+      }
+    });
 
     // PATCH publish blog (admin only)
     app.patch(
