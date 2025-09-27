@@ -1,4 +1,5 @@
 // server.js
+
 const express = require("express");
 const dotenv = require("dotenv");
 dotenv.config();
@@ -53,6 +54,7 @@ const verifyJWT = async (req, res, next) => {
     const decoded = await admin.auth().verifyIdToken(token);
     req.tokenEmail = decoded.email;
     console.log(decoded);
+
     next();
   } catch (err) {
     return res
@@ -107,24 +109,35 @@ async function run() {
       res.send("Blood Bank API is running");
     });
 
-    // // GET all donation requests
+    // ✅ Get all requests (admin + volunteer can see all, donor sees their own)
+
     app.get(
       "/donationRequests",
       verifyJWT,
       roleBaseAccess("donor", "admin", "volunteer"),
       async (req, res) => {
         try {
-          const filter = {};
-          if (req.query.status) filter.status = req.query.status;
-          if (req.query.requesterEmail)
-            filter.requesterEmail = req.query.requesterEmail;
-          if (req.query.donorEmail) filter.donorEmail = req.query.donorEmail;
+          const { email, role } = req.tokenEmail; // from JWT
+          const { requesterEmail } = req.query;
+
+          let query = {};
+
+          // If donor, only fetch their own requests
+          if (role === "donor") {
+            query.requesterEmail = email; // ignore query param for security
+          } else if (requesterEmail) {
+            // admin or volunteer can optionally filter by donor
+            query.requesterEmail = requesterEmail;
+          }
 
           const requests = await donationRequestsCollection
-            .find(filter)
+            .find(query)
+            .sort({ createdAt: -1 })
             .toArray();
+
           res.status(200).json(requests);
         } catch (error) {
+          console.error(error);
           res.status(500).json({ error: "Failed to fetch donation requests" });
         }
       }
@@ -244,175 +257,150 @@ async function run() {
       }
     );
 
-    // ------Update a donation request (only requester can update)-----
+    // ✅ Update donation request (admin OR requester can update details)
     app.put(
       "/donationRequests/:id",
       verifyJWT,
-      roleBaseAccess("donor", "admin", "volunteer"),
+      roleBaseAccess("admin", "donor"),
       async (req, res) => {
         try {
-          const { id } = req.params;
-          const updateData = req.body;
+          const id = req.params.id;
+          const updateData = { ...req.body };
 
-          if (!ObjectId.isValid(id)) {
-            return res.status(400).json({ error: "Invalid request ID" });
-          }
+          // Remove _id if present
+          delete updateData._id;
 
-          // Only allow requester to update
           const request = await donationRequestsCollection.findOne({
             _id: new ObjectId(id),
           });
-          if (!request)
-            return res
-              .status(404)
-              .json({ error: "Donation request not found" });
-          if (request.requesterEmail !== req.tokenEmail) {
-            return res
-              .status(403)
-              .json({ error: "You are not allowed to update this request" });
+
+          if (!request) {
+            return res.status(404).json({ error: "Request not found" });
           }
 
-          // Prevent changing donor info
-          delete updateData._id;
-          delete updateData.donorName;
-          delete updateData.donorEmail;
-          delete updateData.status;
-
-          updateData.updatedAt = new Date();
+          // Only admin OR original requester can update
+          if (
+            req.tokenRole !== "admin" &&
+            request.requesterEmail !== req.tokenEmail
+          ) {
+            return res
+              .status(403)
+              .json({ error: "Not authorized to update this request" });
+          }
 
           const result = await donationRequestsCollection.updateOne(
             { _id: new ObjectId(id) },
             { $set: updateData }
           );
 
-          res
-            .status(200)
-            .json({ message: "Donation request updated successfully", result });
+          res.json({ message: "Request updated" });
         } catch (err) {
-          console.error("Error updating donation request:", err);
-          res.status(500).json({ error: "Failed to update donation request" });
+          res.status(500).json({ error: err.message });
         }
       }
     );
 
-    // ---------Delete a donation request (only requester can delete)---------
-    app.delete(
-      "/donationRequests/:id",
+    // ------------✅ Delete donation request (admin OR requester only)-----------------
+
+    app.delete("/donationRequests/:id", verifyJWT, async (req, res) => {
+      try {
+        const { id } = req.params;
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).json({ error: "Invalid request ID" });
+        }
+
+        const objectId = new ObjectId(id);
+        const request = await donationRequestsCollection.findOne({
+          _id: objectId,
+        });
+
+        if (!request) {
+          return res.status(404).json({ error: "Request not found" });
+        }
+
+        // ✅ Only allow deletion if requester email matches token
+        if (request.requesterEmail !== req.tokenEmail) {
+          return res
+            .status(403)
+            .json({ error: "Not authorized to delete this request" });
+        }
+
+        await donationRequestsCollection.deleteOne({ _id: objectId });
+        res.json({ message: "Request deleted" });
+      } catch (err) {
+        console.error("Delete route error:", err);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+
+    //---------- allBloodDonation for admin and volunteer only-------------------
+
+    // ✅ Get all blood donation requests (admin + volunteer can see all, donor sees their own)
+    app.get(
+      "/allBloodDonationRequest",
       verifyJWT,
-      roleBaseAccess("donor", "admin", "volunteer"),
+      roleBaseAccess("admin", "volunteer", "donor"), // all roles can access
       async (req, res) => {
         try {
-          const { id } = req.params;
+          const userEmail = req.tokenEmail;
 
-          if (!ObjectId.isValid(id)) {
-            return res.status(400).json({ error: "Invalid request ID" });
+          // Find the user's role from the database
+          const user = await usersCollection.findOne({ email: userEmail });
+          if (!user) {
+            return res.status(404).json({ error: "User not found" });
           }
 
-          // Find the request
-          const request = await donationRequestsCollection.findOne({
-            _id: new ObjectId(id),
-          });
-          if (!request)
-            return res
-              .status(404)
-              .json({ error: "Donation request not found" });
+          let query = {};
 
-          // Only the requester can delete
-          if (request.requesterEmail !== req.tokenEmail) {
-            return res
-              .status(403)
-              .json({ error: "You are not allowed to delete this request" });
+          // If donor, only fetch their own requests
+          if (user.role === "donor") {
+            query.requesterEmail = userEmail;
           }
 
-          const result = await donationRequestsCollection.deleteOne({
-            _id: new ObjectId(id),
-          });
+          // Fetch all matching donation requests
+          const allRequests = await donationRequestsCollection
+            .find(query)
+            .sort({ createdAt: -1 }) // latest first
+            .toArray();
 
-          if (result.deletedCount === 0) {
-            return res
-              .status(500)
-              .json({ error: "Failed to delete donation request" });
-          }
-
-          res
-            .status(200)
-            .json({ message: "Donation request deleted successfully" });
+          res.status(200).json(allRequests);
         } catch (err) {
-          console.error("Error deleting donation request:", err);
-          res.status(500).json({ error: "Failed to delete donation request" });
+          console.error("Error fetching all donation requests:", err);
+          res.status(500).json({ error: "Failed to fetch donation requests" });
         }
       }
     );
-
-    // -------PATCH: Update donation request status-------
-
+    //For update all Donation page volunteer status
     app.patch(
-      "/donationRequests/:id",
+      "/donationRequests/:id/status/admin",
       verifyJWT,
-      roleBaseAccess("donor", "admin", "volunteer"),
+      roleBaseAccess("admin", "volunteer"),
       async (req, res) => {
         try {
           const { id } = req.params;
           const { status } = req.body;
 
-          if (!ObjectId.isValid(id)) {
-            return res.status(400).json({ error: "Invalid request ID" });
-          }
-
-          // Only allow certain status updates
-          const allowedStatus = ["inprogress", "done", "canceled"];
-          if (!allowedStatus.includes(status)) {
-            return res.status(400).json({ error: "Invalid status value" });
-          }
-
-          // Fetch the request first
-          const request = await donationRequestsCollection.findOne({
-            _id: new ObjectId(id),
-          });
-
-          if (!request) {
-            return res
-              .status(404)
-              .json({ error: "Donation request not found" });
-          }
-
-          // Only allow status change (done or cancel) if it is inprogress currently
-          if (request.status !== "inprogress") {
-            return res.status(400).json({
-              error: `Status can only be updated from 'inprogress'. Current status: ${request.status}`,
-            });
-          }
-
-          const update = {
-            $set: {
-              status,
-              updatedAt: new Date(),
-            },
-          };
-
           const result = await donationRequestsCollection.updateOne(
             { _id: new ObjectId(id) },
-            update
+            { $set: { status } }
           );
 
           if (result.modifiedCount === 0) {
-            return res.status(500).json({ error: "Failed to update status" });
+            return res
+              .status(404)
+              .json({ error: "Request not found or status unchanged" });
           }
 
-          res.json({
-            message: `Status updated to '${status}' successfully`,
-            status,
-          });
-        } catch (err) {
-          console.error("Error updating status:", err);
-          res
-            .status(500)
-            .json({ error: "Failed to update donation request status" });
+          res.status(200).json({ message: "Status updated successfully" });
+        } catch (error) {
+          console.error(error);
+          res.status(500).json({ error: "Failed to update status" });
         }
       }
     );
 
-    // GET a single donation request by ID
+    //------ GET a single donation request by ID------
     app.get(
       "/donationRequests/:id",
       verifyJWT,
@@ -475,6 +463,59 @@ async function run() {
           });
         } catch (error) {
           res.status(500).json({ error: "Failed to create donation request" });
+        }
+      }
+    );
+
+    //-----patch for done and cancel button if status==inprogress for donor
+
+    app.patch(
+      "/donationRequests/:id/status/donor",
+      verifyJWT,
+      roleBaseAccess("donor"),
+      async (req, res) => {
+        try {
+          const { id } = req.params;
+          const { status } = req.body;
+
+          if (!["done", "canceled"].includes(status)) {
+            return res
+              .status(400)
+              .json({ error: "Invalid status. Allowed: done, canceled" });
+          }
+
+          const request = await donationRequestsCollection.findOne({
+            _id: new ObjectId(id),
+          });
+          if (!request)
+            return res.status(404).json({ error: "Request not found" });
+
+          if (request.status !== "inprogress") {
+            return res
+              .status(403)
+              .json({ error: "Only in-progress requests can be updated." });
+          }
+
+          // Ensure donor can only update their own requests
+          if (
+            !request.requesterEmail ||
+            request.requesterEmail.toLowerCase() !==
+              req.tokenEmail.toLowerCase()
+          ) {
+            return res
+              .status(403)
+              .json({ error: "You are not assigned to this request." });
+          }
+
+          await donationRequestsCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { status } }
+          );
+
+          res.json({ message: `Status changed to '${status}' successfully.` });
+        } catch (err) {
+          console.error(err);
+          res.status(500).json({ error: "Internal server error" });
         }
       }
     );
