@@ -1024,7 +1024,7 @@ async function run() {
     app.get(
       "/funds",
       verifyJWT,
-      roleBaseAccess("admin", "volunteer"),
+      roleBaseAccess("admin", "volunteer", "donor"),
       async (req, res) => {
         try {
           const donations = await fundCollection
