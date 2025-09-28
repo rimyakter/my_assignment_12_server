@@ -1,7 +1,7 @@
 // server.js
 const dotenv = require("dotenv");
-const express = require("express");
 dotenv.config();
+const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const app = express();
@@ -22,7 +22,7 @@ const stripe = require("stripe")(process.env.FUND_SECRET_KEY);
 // Middleware
 app.use(
   cors({
-    origin: ["http://localhost:5173"],
+    origin: ["http://localhost:5173", "https://blood-bridge-63fb5.web.app"],
     credentials: true,
   })
 );
@@ -148,8 +148,8 @@ async function run() {
     // GET all pending donation requests
     app.get(
       "/donationRequests/pending",
-      verifyJWT,
-      roleBaseAccess("donor", "admin", "volunteer"),
+      // verifyJWT,
+      // roleBaseAccess("donor", "admin", "volunteer"),
       async (req, res) => {
         try {
           const requests = await donationRequestsCollection
@@ -544,8 +544,8 @@ async function run() {
 
     app.get(
       "/users/search",
-      verifyJWT,
-      roleBaseAccess("donor", "admin", "volunteer"),
+      // verifyJWT,
+      // roleBaseAccess("donor", "admin", "volunteer"),
       async (req, res) => {
         try {
           const { bloodGroup, district, upazila } = req.query;
@@ -822,8 +822,8 @@ async function run() {
     // GET all blogs
     app.get(
       "/blogs",
-      verifyJWT,
-      roleBaseAccess("donor", "admin", "volunteer"),
+      // verifyJWT,
+      // roleBaseAccess("donor", "admin", "volunteer"),
       async (req, res) => {
         try {
           const blogs = await blogsCollection
