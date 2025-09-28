@@ -1,7 +1,6 @@
 // server.js
-
-const express = require("express");
 const dotenv = require("dotenv");
+const express = require("express");
 dotenv.config();
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
