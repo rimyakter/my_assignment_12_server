@@ -18,6 +18,7 @@ admin.initializeApp({
 
 const PORT = process.env.PORT || 3000;
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const stripe = require("stripe")(process.env.FUND_SECRET_KEY);
 
 // Middleware
 app.use(
@@ -71,6 +72,7 @@ async function run() {
     const usersCollection = db.collection("users");
     const blogsCollection = db.collection("blogs");
     const contactFormCollection = db.collection("contactFormData");
+    const fundCollection = db.collection("funds");
 
     //jwt generate
     app.post("/jwt", (req, res) => {
@@ -953,6 +955,86 @@ async function run() {
           res.json({ message: "Blog deleted successfully" });
         } catch (err) {
           res.status(500).json({ error: err.message });
+        }
+      }
+    );
+
+    //--------------------Funding for Donation Api-----------------------------------
+
+    // ✅ Create PaymentIntent (any user can donate any amount)
+    app.post("/create-payment-intent", async (req, res) => {
+      try {
+        const { amount } = req.body;
+
+        if (!amount || amount <= 0) {
+          return res.status(400).send({ error: "Invalid amount" });
+        }
+
+        // Stripe expects amount in cents
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount,
+          currency: "usd",
+          automatic_payment_methods: { enabled: true },
+        });
+
+        res.send({ clientSecret: paymentIntent.client_secret });
+      } catch (error) {
+        console.error("❌ Error creating PaymentIntent:", error);
+        res.status(500).send({ error: error.message });
+      }
+    });
+
+    // --------------✅ Save fund donation after successful payment------------
+
+    app.post("/save-fund", verifyJWT, async (req, res) => {
+      try {
+        const { amount, paymentIntentId } = req.body;
+        const email = req.tokenEmail;
+
+        if (!amount || !paymentIntentId) {
+          return res
+            .status(400)
+            .send({ message: "Amount and paymentIntentId required" });
+        }
+
+        const user = await usersCollection.findOne({ email });
+
+        const fundData = {
+          amount,
+          email,
+          name: user?.name || "Anonymous",
+          paymentIntentId,
+          createdAt: new Date(),
+        };
+
+        const result = await fundCollection.insertOne(fundData);
+
+        res.status(201).send({
+          success: true,
+          message: "Donation saved successfully",
+          data: result,
+        });
+      } catch (error) {
+        console.error("Error saving donation:", error);
+        res.status(500).send({ error: "Failed to save donation" });
+      }
+    });
+
+    // ------------✅ Get all funds (only admin & volunteer can see)-----------
+    app.get(
+      "/funds",
+      verifyJWT,
+      roleBaseAccess("admin", "volunteer"),
+      async (req, res) => {
+        try {
+          const donations = await fundCollection
+            .find()
+            .sort({ createdAt: -1 })
+            .toArray();
+          res.status(200).send(donations);
+        } catch (error) {
+          console.error("Error fetching donations:", error);
+          res.status(500).send({ error: "Failed to fetch donations" });
         }
       }
     );
